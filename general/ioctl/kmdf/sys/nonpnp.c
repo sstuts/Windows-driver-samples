@@ -55,6 +55,9 @@ Environment:
 #endif // ALLOC_PRAGMA
 
 
+static PCHAR remote_framebuffer = NULL;
+static WDFREQUEST FB_request = NULL;
+
 NTSTATUS
 DriverEntry(
     IN OUT PDRIVER_OBJECT   DriverObject,
@@ -801,6 +804,8 @@ Return Value:
     PCHAR               buffer = NULL;
     PREQUEST_CONTEXT    reqContext = NULL;
     size_t               bufSize;
+   
+    int                bCompleteIO = TRUE;
 
     UNREFERENCED_PARAMETER( Queue );
 
@@ -978,10 +983,6 @@ Return Value:
         Hexdump((TRACE_LEVEL_VERBOSE,  DBG_IOCTL, "Data to User : %!HEXDUMP!\n",
                         log_xstr(buffer, (USHORT)datalen)));
         PrintChars(buffer, datalen);
-
-        WdfRequestSetInformation(Request,
-                    OutputBufferLength < datalen? OutputBufferLength: datalen);
-
         //
         // NOTE: Changes made to the  SystemBuffer are not copied
         // to the user input buffer by the I/O manager
@@ -1039,6 +1040,47 @@ Return Value:
 
             break;
         }
+
+    case IOCTL_NONPNP_MAP_FRAMEBUFFER:
+
+        TraceEvents(TRACE_LEVEL_VERBOSE, DBG_IOCTL, "Called IOCTL_NONPNP_MAP_FRAMEBUFFER\n");
+
+        status = WdfRequestRetrieveInputBuffer(Request, 0, &inBuf, &bufSize);
+        if (!NT_SUCCESS(status)) {
+            status = STATUS_INSUFFICIENT_RESOURCES;
+            break;
+        }
+
+        remote_framebuffer = inBuf;
+        FB_request = Request;
+
+        ASSERT(bufSize == InputBufferLength);
+       
+        bCompleteIO = FALSE;
+        break;
+
+    case IOCTL_NONPNP_UNMAP_FRAMEBUFFER:
+        TraceEvents(TRACE_LEVEL_VERBOSE, DBG_IOCTL, "Called IOCTL_NONPNP_UNMAP_FRAMEBUFFER\n");
+        if (FB_request) {
+            WdfRequestComplete(FB_request, status);
+            FB_request = NULL;
+        }
+        break;
+
+    case IOCTL_NONPNP_TEST_FRAMEBUFFER:
+        TraceEvents(TRACE_LEVEL_VERBOSE, DBG_IOCTL, "Called IOCTL_NONPNP_TEST_FRAMEBUFFER\n");
+
+
+        status = WdfRequestRetrieveOutputBuffer(Request, 0, &buffer, &bufSize);
+        if (!NT_SUCCESS(status)) {
+            break;
+        }
+        RtlCopyMemory(buffer, remote_framebuffer, OutputBufferLength);
+
+        WdfRequestSetInformation(Request, OutputBufferLength);
+        ASSERT(bufSize == OutputBufferLength);
+        break;
+
     default:
 
         //
@@ -1052,7 +1094,9 @@ Return Value:
     TraceEvents(TRACE_LEVEL_VERBOSE, DBG_IOCTL, "Completing Request %p with status %X",
                    Request, status );
 
-    WdfRequestComplete( Request, status);
+    if (bCompleteIO) {
+        WdfRequestComplete(Request, status);
+    }
 
 }
 

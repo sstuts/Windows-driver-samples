@@ -80,6 +80,11 @@ DoIoctls(
     HANDLE hDevice
     );
 
+VOID
+DoFramebufferIoctls(
+    HANDLE hDevice
+);
+
 // for example, WDF 1.9 is "01009". the size 6 includes the ending NULL marker
 //
 #define MAX_VERSION_SIZE 6
@@ -323,7 +328,7 @@ main(
             return;
         }
     }
-
+#if 0
     DoIoctls(hDevice);
 
     do {
@@ -338,7 +343,7 @@ main(
         Sleep(1000); // sleep for 1 sec.
 
     } WHILE (TRUE);
-
+#endif
     //
     // Close the handle to the device before unloading the driver.
     //
@@ -360,6 +365,85 @@ main(
     return;
 }
 
+PCHAR  GenTestLine(PCHAR pattern, unsigned int length, PCHAR pLine) {
+    for (unsigned int i = 0; i < length; i++) {
+        memcpy(pLine, pattern, 4);
+        pLine += 4;
+    }
+    return pLine;
+}
+
+PCHAR GenFramebuffer(unsigned int width, unsigned int height, PCHAR pattern, PCHAR framebuffer)
+{
+
+    for (unsigned int h = 0; h < height; h++) {
+        framebuffer = GenTestLine(pattern, width, framebuffer);
+    }
+    return framebuffer;
+}
+
+VOID DoFramebufferIoctls(HANDLE hDevice)
+{
+    BOOL bRc;
+    ULONG bytesReturned;
+    char pattern[4] = { 0, 0xff, 0, 0 };
+
+    char Framebuffer[MAX_FRAMEBUFFER_HEIGHT * MAX_FRAMEBUFFER_WIDTH * 4];
+    char TestBuffer[MAX_FRAMEBUFFER_WIDTH * 4 * 4];
+    PCHAR pFB;
+
+    printf("Framebuffer pointer = %p of %Id\n", Framebuffer, sizeof(Framebuffer));
+    printf("Test pointer %p of %Id\n", TestBuffer, sizeof(TestBuffer));
+
+    //set the framebuffer to solid color
+    GenFramebuffer(MAX_FRAMEBUFFER_WIDTH, MAX_FRAMEBUFFER_HEIGHT, pattern, Framebuffer);
+
+    printf("\nCalling DeviceIOControl MAP_FRAMEBUFFER:\n");
+
+    bRc = DeviceIoControl(hDevice,
+        (DWORD)IOCTL_NONPNP_MAP_FRAMEBUFFER,
+        Framebuffer, (DWORD)strlen(Framebuffer) + 1,
+        TestBuffer, (DWORD)strlen(TestBuffer),
+        &bytesReturned, NULL);
+
+    if (!bRc) {
+        printf(" Error in DeviceIoControl : %d\n", GetLastError());
+    }
+
+    //Update the contents of the framebuffer and see if you get the same back
+    pattern[2] = 1;
+    pFB = GenFramebuffer(MAX_FRAMEBUFFER_WIDTH, 5, pattern, Framebuffer);
+    for (unsigned int i = 0; i < 10; i++) {
+        pFB += MAX_FRAMEBUFFER_WIDTH * 5 * 4;
+        pFB = GenFramebuffer(MAX_FRAMEBUFFER_WIDTH, 5, pattern, pFB);
+        pattern[2]++;
+    }
+
+
+    //Read it back to see if it reflects the change
+    memset(TestBuffer, 0, sizeof(TestBuffer));
+    bRc = DeviceIoControl(hDevice,
+        (DWORD)IOCTL_NONPNP_TEST_FRAMEBUFFER,
+        Framebuffer,
+        (DWORD)10,
+        TestBuffer,
+        sizeof(TestBuffer),
+        &bytesReturned,
+        NULL
+    );
+       
+    if (!bRc)
+    {
+        printf("Error in DeviceIoControl : : %d", GetLastError());
+    }
+    else {
+        printf("    TestBuffer (%d): \n", bytesReturned);
+    }
+    //Un map the framebuffer
+    bRc = DeviceIoControl(hDevice,
+        (DWORD)IOCTL_NONPNP_UNMAP_FRAMEBUFFER,
+        NULL, 0, NULL, 0, &bytesReturned, NULL);
+}
 
 VOID
 DoIoctls(
@@ -490,23 +574,7 @@ DoIoctls(
 
     memset(OutputBuffer, 0, sizeof(OutputBuffer));
 
-    bRc = DeviceIoControl ( hDevice,
-                            (DWORD) IOCTL_NONPNP_METHOD_OUT_DIRECT,
-                            InputBuffer,
-                            (DWORD) strlen( InputBuffer )+1,
-                            OutputBuffer,
-                            sizeof( OutputBuffer),
-                            &bytesReturned,
-                            NULL
-                            );
-
-    if ( !bRc )
-    {
-        printf ( "Error in DeviceIoControl : : %d", GetLastError());
-        return;
-    }
-
-    printf("    OutBuffer (%d): %s\n", bytesReturned, OutputBuffer);
+ 
 
     return;
 

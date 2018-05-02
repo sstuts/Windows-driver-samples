@@ -87,13 +87,14 @@ DoFramebufferIoctls(
 
 // for example, WDF 1.9 is "01009". the size 6 includes the ending NULL marker
 //
-#define MAX_VERSION_SIZE 6
+#define MAX_VERSION_SIZE 8
 
 CHAR G_coInstallerVersion[MAX_VERSION_SIZE] = {0};
 BOOLEAN  G_fLoop = FALSE;
 BOOL G_versionSpecified = FALSE;
 
-
+char * Framebuffer;
+char * TestBuffer;
 
 //-----------------------------------------------------------------------------
 // 4127 -- Conditional Expression is Constant warning
@@ -343,6 +344,8 @@ main(
         Sleep(1000); // sleep for 1 sec.
 
     } WHILE (TRUE);
+#else
+    DoFramebufferIoctls(hDevice);
 #endif
     //
     // Close the handle to the device before unloading the driver.
@@ -382,15 +385,19 @@ PCHAR GenFramebuffer(unsigned int width, unsigned int height, PCHAR pattern, PCH
     return framebuffer;
 }
 
+
 VOID DoFramebufferIoctls(HANDLE hDevice)
 {
     BOOL bRc;
     ULONG bytesReturned;
     char pattern[4] = { 0, 0xff, 0, 0 };
-
-    char Framebuffer[MAX_FRAMEBUFFER_HEIGHT * MAX_FRAMEBUFFER_WIDTH * 4];
-    char TestBuffer[MAX_FRAMEBUFFER_WIDTH * 4 * 4];
+    BufferSize frame_buffer, test_buffer;
     PCHAR pFB;
+
+    Framebuffer = malloc(MAX_FRAMEBUFFER_HEIGHT * MAX_FRAMEBUFFER_WIDTH * 4);
+    TestBuffer = malloc(MAX_FRAMEBUFFER_WIDTH * 4 * 4);
+
+    memset(TestBuffer, 0, MAX_FRAMEBUFFER_WIDTH * 4 * 4);
 
     printf("Framebuffer pointer = %p of %Id\n", Framebuffer, sizeof(Framebuffer));
     printf("Test pointer %p of %Id\n", TestBuffer, sizeof(TestBuffer));
@@ -400,13 +407,18 @@ VOID DoFramebufferIoctls(HANDLE hDevice)
 
     printf("\nCalling DeviceIOControl MAP_FRAMEBUFFER:\n");
 
+    frame_buffer._addr = Framebuffer;
+    frame_buffer._length = MAX_FRAMEBUFFER_HEIGHT * MAX_FRAMEBUFFER_WIDTH * 4;
+    test_buffer._addr = TestBuffer;
+    test_buffer._length = MAX_FRAMEBUFFER_WIDTH * 4 * 4;
     bRc = DeviceIoControl(hDevice,
         (DWORD)IOCTL_NONPNP_MAP_FRAMEBUFFER,
-        Framebuffer, (DWORD)strlen(Framebuffer) + 1,
-        TestBuffer, (DWORD)strlen(TestBuffer),
+        &frame_buffer, (DWORD)sizeof(BufferSize),
+        &test_buffer, (DWORD)sizeof(BufferSize),
         &bytesReturned, NULL);
 
     if (!bRc) {
+        printf("Testing %d\n", (int)sizeof(BufferSize));
         printf(" Error in DeviceIoControl : %d\n", GetLastError());
     }
 
@@ -421,13 +433,10 @@ VOID DoFramebufferIoctls(HANDLE hDevice)
 
 
     //Read it back to see if it reflects the change
-    memset(TestBuffer, 0, sizeof(TestBuffer));
     bRc = DeviceIoControl(hDevice,
         (DWORD)IOCTL_NONPNP_TEST_FRAMEBUFFER,
-        Framebuffer,
-        (DWORD)10,
-        TestBuffer,
-        sizeof(TestBuffer),
+        &frame_buffer, (DWORD)sizeof(BufferSize),
+        &test_buffer, (DWORD)sizeof(BufferSize),
         &bytesReturned,
         NULL
     );
@@ -442,7 +451,11 @@ VOID DoFramebufferIoctls(HANDLE hDevice)
     //Un map the framebuffer
     bRc = DeviceIoControl(hDevice,
         (DWORD)IOCTL_NONPNP_UNMAP_FRAMEBUFFER,
-        NULL, 0, NULL, 0, &bytesReturned, NULL);
+        &frame_buffer, (DWORD)sizeof(BufferSize),
+        &test_buffer, (DWORD)sizeof(BufferSize),
+        &bytesReturned, NULL);
+    free(TestBuffer);
+    free(Framebuffer);
 }
 
 VOID

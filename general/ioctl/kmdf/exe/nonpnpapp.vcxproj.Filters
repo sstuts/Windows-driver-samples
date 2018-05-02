@@ -15,10 +15,10 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="install.c">
+    <ClCompile Include="testapp.c; install.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="testapp.c">
+    <ClCompile Include="testapp.c; install.c">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

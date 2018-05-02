@@ -56,7 +56,8 @@ Environment:
 
 
 static PCHAR remote_framebuffer = NULL;
-static WDFREQUEST FB_request = NULL;
+static PMDL       fb_mdl = NULL;
+static PMDL       tb_mdl = NULL;
 
 NTSTATUS
 DriverEntry(
@@ -763,6 +764,48 @@ Return Value:
 
 }
 
+NTSTATUS  map_user_address(BufferSize * pBufferDesc, PMDL * pMdl, PCHAR * sys_buffer, int operation)
+{
+    PCHAR ret_addr = NULL;
+    NTSTATUS status = 0;
+    *sys_buffer = NULL;
+    PMDL mdl;
+    *pMdl = NULL;
+
+    try {
+        ProbeForRead(pBufferDesc->_addr, pBufferDesc->_length, sizeof(UCHAR));
+    }
+    except(EXCEPTION_EXECUTE_HANDLER) {
+        return GetExceptionCode();
+    }
+
+    mdl = IoAllocateMdl(pBufferDesc->_addr, pBufferDesc->_length, FALSE, TRUE, NULL);
+    if (!mdl) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    try {
+        MmProbeAndLockPages(mdl, UserMode, operation);
+    }
+
+    except(EXCEPTION_EXECUTE_HANDLER) {
+        status = GetExceptionCode();
+        IoFreeMdl(mdl);
+        return status;
+    }
+
+    ret_addr = MmGetSystemAddressForMdlSafe(mdl, NormalPagePriority | MdlMappingNoExecute);
+    if (!ret_addr) {
+        status = STATUS_INSUFFICIENT_RESOURCES;
+        MmUnlockPages(mdl);
+        IoFreeMdl(mdl);
+        return status;
+    }
+    *pMdl = mdl;
+    *sys_buffer = ret_addr;
+    return 0;
+}
+
 VOID
 FileEvtIoDeviceControl(
     IN WDFQUEUE         Queue,
@@ -803,9 +846,10 @@ Return Value:
     ULONG               datalen = (ULONG) strlen(data)+1;//Length of data including null
     PCHAR               buffer = NULL;
     PREQUEST_CONTEXT    reqContext = NULL;
-    size_t               bufSize;
-   
-    int                bCompleteIO = TRUE;
+    size_t              bufSize;
+    BufferSize   *      frame_buffer;
+    BufferSize   *      test_buffer;
+    int                 bCompleteIO = TRUE;
 
     UNREFERENCED_PARAMETER( Queue );
 
@@ -1045,25 +1089,34 @@ Return Value:
 
         TraceEvents(TRACE_LEVEL_VERBOSE, DBG_IOCTL, "Called IOCTL_NONPNP_MAP_FRAMEBUFFER\n");
 
-        status = WdfRequestRetrieveInputBuffer(Request, 0, &inBuf, &bufSize);
+        status = WdfRequestRetrieveInputBuffer(Request, 0, &frame_buffer, &bufSize);
         if (!NT_SUCCESS(status)) {
             status = STATUS_INSUFFICIENT_RESOURCES;
             break;
         }
 
-        remote_framebuffer = inBuf;
-        FB_request = Request;
+        status = map_user_address(frame_buffer, &fb_mdl, &remote_framebuffer, IoReadAccess);
+        if (!NT_SUCCESS(status)) {
+            status = STATUS_INSUFFICIENT_RESOURCES;
+            break;
+        }
 
         ASSERT(bufSize == InputBufferLength);
        
-        bCompleteIO = FALSE;
+        bCompleteIO = TRUE;
         break;
 
     case IOCTL_NONPNP_UNMAP_FRAMEBUFFER:
         TraceEvents(TRACE_LEVEL_VERBOSE, DBG_IOCTL, "Called IOCTL_NONPNP_UNMAP_FRAMEBUFFER\n");
-        if (FB_request) {
-            WdfRequestComplete(FB_request, status);
-            FB_request = NULL;
+
+        if (fb_mdl) {
+            MmUnlockPages(fb_mdl);
+            IoFreeMdl(fb_mdl);
+        }
+
+        if (tb_mdl) {
+            MmUnlockPages(tb_mdl);
+            IoFreeMdl(tb_mdl);
         }
         break;
 
@@ -1071,14 +1124,21 @@ Return Value:
         TraceEvents(TRACE_LEVEL_VERBOSE, DBG_IOCTL, "Called IOCTL_NONPNP_TEST_FRAMEBUFFER\n");
 
 
-        status = WdfRequestRetrieveOutputBuffer(Request, 0, &buffer, &bufSize);
+        status = WdfRequestRetrieveOutputBuffer(Request, 0, &test_buffer, &bufSize);
         if (!NT_SUCCESS(status)) {
             break;
         }
-        RtlCopyMemory(buffer, remote_framebuffer, OutputBufferLength);
+        ASSERT(bufSize == OutputBufferLength);
+
+        status = map_user_address(test_buffer, &tb_mdl, &buffer, IoWriteAccess);
+        if (!NT_SUCCESS(status)) {
+            status = STATUS_INSUFFICIENT_RESOURCES;
+            break;
+        }
+
+        RtlCopyMemory(buffer, remote_framebuffer, test_buffer->_length);
 
         WdfRequestSetInformation(Request, OutputBufferLength);
-        ASSERT(bufSize == OutputBufferLength);
         break;
 
     default:
